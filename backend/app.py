@@ -485,7 +485,7 @@ def buy_credits():
     except Exception as e:
         return jsonify({"error": "Invalid JSON data"}), 400
 
-    # 1. Get the data
+    # 1. Get the data 
     email = data.get('email')
     amount_to_buy = data.get('amount_to_buy')
 
@@ -515,6 +515,103 @@ def buy_credits():
             "message": "Credits purchased successfully!",
             "new_credit_balance": new_credit_balance
         }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {e}"}), 500
+@app.route("/api/user/rate", methods=["POST"])
+def rate_user():
+    try:
+        data = request.get_json()
+    except Exception as e:
+        return jsonify({"error": "Invalid JSON data"}), 400
+
+    # 1. Get the data
+    user_to_rate_email = data.get('user_to_rate_email')
+    rating = data.get('rating') # A number, e.g., 5
+    comment = data.get('comment', '') # Optional comment
+    rater_email = data.get('rater_email') # Who is submitting this
+
+    if not user_to_rate_email or not rating or not rater_email:
+        return jsonify({"error": "Missing user_to_rate_email, rating, or rater_email"}), 400
+
+    if db is None:
+        return jsonify({"error": "Database not connected"}), 503
+
+    try:
+        # 2. Find the user we want to rate
+        user_to_rate = db.users.find_one({"email": user_to_rate_email.strip().lower()})
+        if not user_to_rate:
+            return jsonify({"error": "User-to-be-rated not found"}), 404
+
+        # 3. Create the new rating object
+        new_rating = {
+            "rating": rating,
+            "comment": comment,
+            "by_user": rater_email
+        }
+
+        # 4. Add this new rating to the user's "ratings" list
+        # $push adds an item to an array. If the array doesn't exist, it creates it.
+        db.users.update_one(
+            {"email": user_to_rate_email.strip().lower()},
+            {"$push": {"ratings": new_rating}}
+        )
+        
+        return jsonify({"message": "Rating submitted successfully!"}), 201
+
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {e}"}), 500
+@app.route("/api/user/profile")
+def get_user_profile():
+    # 1. Get the user's email from the query string
+    user_email = request.args.get('email')
+
+    if not user_email:
+        return jsonify({"error": "No email specified"}), 400
+
+    if db is None:
+        return jsonify({"error": "Database not connected"}), 503
+
+    try:
+        # 2. Find the user
+        user = db.users.find_one(
+            {"email": user_email.strip().lower()},
+            {"_id": 0, "password": 0}  # Exclude private data
+        )
+        
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        
+        # 3. Calculate average rating
+        avg_rating = 0
+        ratings_list = user.get('ratings', []) # Get the list, or an empty list
+        
+        if ratings_list: # Check if the list is not empty
+            total_rating = 0
+            for r in ratings_list:
+                total_rating += r.get('rating', 0)
+            avg_rating = round(total_rating / len(ratings_list), 1) # Round to 1 decimal
+
+        # 4. Count completed swaps
+        completed_swaps = db.swaps.count_documents({
+            "status": "completed",
+            "$or": [
+                {"requester_email": user_email},
+                {"receiver_email": user_email}
+            ]
+        })
+        
+        # 5. Build the public profile object
+        public_profile = {
+            "email": user.get('email'),
+            "college_id": user.get('college_id'),
+            "average_rating": avg_rating,
+            "total_ratings": len(ratings_list),
+            "completed_swaps": completed_swaps,
+            "ratings_list": ratings_list # Send the full list of comments
+        }
+            
+        return jsonify(public_profile)
 
     except Exception as e:
         return jsonify({"error": f"An error occurred: {e}"}), 500
